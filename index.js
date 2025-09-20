@@ -16,20 +16,20 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
 // ===============================
-// MIDDLEWARES
+// MIDDLEWARES CORS
 // ===============================
 const allowedOrigins = [
   "http://localhost:3001",
   "http://127.0.0.1:3001",
-  "https://whatsapp-reminders.vercel.app",
+  "https://front-git-main-cesar10-52-hotmailcoms-projects.vercel.app"
 ];
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.some((o) => origin.startsWith(o))) {
-        return callback(null, true);
-      }
+      if (!origin) return callback(null, true); // Permite herramientas como Postman
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      console.log("❌ CORS rechazado:", origin);
       callback(new Error("CORS no permitido"));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -44,7 +44,12 @@ app.use(express.json());
 // ===============================
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      console.log("❌ Socket.IO CORS rechazado:", origin);
+      callback(new Error("CORS no permitido"));
+    },
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -128,7 +133,6 @@ function initializeWhatsAppClient() {
     isInitializing = false;
     whatsappClient = null;
     io.emit("logout", { reason });
-    // Reinicializar cliente automáticamente
     setTimeout(() => initializeWhatsAppClient(), 3000);
   });
 
