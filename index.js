@@ -21,14 +21,20 @@ const PORT = process.env.PORT || 3000;
 const allowedOrigins = [
   "http://localhost:3001",
   "http://127.0.0.1:3001",
-  "https://front-git-main-cesar10-52-hotmailcoms-projects.vercel.app"
 ];
+
+function checkOrigin(origin) {
+  if (!origin) return true; // Postman o herramientas sin origin
+  if (allowedOrigins.includes(origin)) return true;
+  // Permite cualquier subdominio de tu proyecto Vercel
+  if (/^https:\/\/front-.*-cesar10-52-hotmailcoms-projects\.vercel\.app$/.test(origin)) return true;
+  return false;
+}
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true); // Permite herramientas como Postman
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (checkOrigin(origin)) return callback(null, true);
       console.log("❌ CORS rechazado:", origin);
       callback(new Error("CORS no permitido"));
     },
@@ -45,8 +51,7 @@ app.use(express.json());
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (checkOrigin(origin)) return callback(null, true);
       console.log("❌ Socket.IO CORS rechazado:", origin);
       callback(new Error("CORS no permitido"));
     },
