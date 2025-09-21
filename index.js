@@ -4,7 +4,6 @@ const { Client, LocalAuth } = require("whatsapp-web.js")
 const http = require("http")
 const cors = require("cors")
 const QRCode = require("qrcode") // Agregando qrcode library para generar imagen QR
-const { errorHandler, asyncHandler } = require("./middleware/error-handler")
 
 // Configuración del servidor
 console.log("🚀 Iniciando servidor WhatsApp Reminder System...")
@@ -68,6 +67,22 @@ let isClientReady = false
 let isInitializing = false // Prevenir múltiples inicializaciones
 const clients = [] // Array en memoria para almacenar clientes
 
+// Inline error handling functions
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next)
+}
+
+const errorHandler = (err, req, res, next) => {
+  console.error("❌ Error en API:", err.message)
+  console.error("Stack:", err.stack)
+
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.message || "Error interno del servidor",
+    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+  })
+}
+
 function initializeWhatsAppClient() {
   if (isInitializing) {
     console.log("⚠️ Cliente ya está inicializándose, esperando...")
@@ -97,6 +112,8 @@ function initializeWhatsAppClient() {
         "--no-zygote",
         "--single-process",
         "--disable-gpu",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor",
       ],
     },
   })
@@ -107,19 +124,20 @@ function initializeWhatsAppClient() {
 
     try {
       const qrImageUrl = await QRCode.toDataURL(qr, {
-        width: 150, // Reduced size for faster generation
+        width: 150,
         margin: 0,
         color: {
           dark: "#000000",
           light: "#FFFFFF",
         },
-        errorCorrectionLevel: "L", // Fastest generation
+        errorCorrectionLevel: "L",
       })
 
       io.emit("qr", qrImageUrl)
-      console.log("✅ QR enviado al frontend INMEDIATAMENTE")
+      console.log("✅ QR enviado al frontend")
     } catch (error) {
-      console.error("❌ Error generando imagen QR:", error)
+      console.error("❌ Error generando imagen QR:", error.message)
+      // Don't crash the server, just log the error
     }
   })
 
@@ -127,21 +145,21 @@ function initializeWhatsAppClient() {
   whatsappClient.on("ready", () => {
     console.log("✅ ¡Cliente de WhatsApp conectado y listo!")
     isClientReady = true
-    isInitializing = false // Marcar inicialización como completa
+    isInitializing = false
     io.emit("ready", { message: "WhatsApp conectado exitosamente" })
   })
 
   // Evento: Cliente autenticado
   whatsappClient.on("authenticated", () => {
     console.log("🔐 Cliente autenticado correctamente")
-    isInitializing = false // Marcar inicialización como completa
+    isInitializing = false
     io.emit("authenticated", { message: "Autenticación exitosa" })
   })
 
   // Evento: Error de autenticación
   whatsappClient.on("auth_failure", (msg) => {
     console.error("❌ Error de autenticación:", msg)
-    isInitializing = false // Resetear flag en caso de error
+    isInitializing = false
     io.emit("auth_failure", { error: msg })
   })
 
@@ -149,13 +167,24 @@ function initializeWhatsAppClient() {
   whatsappClient.on("disconnected", (reason) => {
     console.log("🔌 Cliente desconectado:", reason)
     isClientReady = false
-    isInitializing = false // Resetear flag
+    isInitializing = false
     io.emit("logout", { reason: reason })
   })
 
-  // Inicializar cliente inmediatamente
+  // Evento: Error en el cliente de WhatsApp
+  whatsappClient.on("error", (error) => {
+    console.error("❌ Error en WhatsApp client:", error.message)
+    // Don't crash the server, just log and continue
+  })
+
+  // Inicializar cliente con manejo de errores
   console.log("🔄 Iniciando proceso de conexión...")
-  whatsappClient.initialize()
+  try {
+    whatsappClient.initialize()
+  } catch (error) {
+    console.error("❌ Error inicializando WhatsApp:", error.message)
+    isInitializing = false
+  }
 }
 
 // Socket.IO - Manejo de conexiones
@@ -267,37 +296,47 @@ app.post(
     console.log("📤 Enviando mensaje a:", phone)
     console.log("💬 Contenido:", message.substring(0, 50) + "...")
 
-    const sendMessageWithTimeout = new Promise(async (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Timeout: El mensaje tardó demasiado en enviarse"))
-      }, 30000) // 30 segundos timeout
+    try {
+      const sendMessageWithTimeout = new Promise(async (resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Timeout: El mensaje tardó demasiado en enviarse"))
+        }, 30000) // 30 segundos timeout
 
-      try {
-        const sentMessage = await whatsappClient.sendMessage(formattedPhone, message)
-        clearTimeout(timeout)
-        resolve(sentMessage)
-      } catch (error) {
-        clearTimeout(timeout)
-        reject(error)
-      }
-    })
+        try {
+          const sentMessage = await whatsappClient.sendMessage(formattedPhone, message)
+          clearTimeout(timeout)
+          resolve(sentMessage)
+        } catch (error) {
+          clearTimeout(timeout)
+          reject(error)
+        }
+      })
 
-    const sentMessage = await sendMessageWithTimeout
+      const sentMessage = await sendMessageWithTimeout
 
-    console.log("✅ ¡Mensaje enviado exitosamente!")
+      console.log("✅ ¡Mensaje enviado exitosamente!")
 
-    // Emitir evento de mensaje enviado
-    io.emit("message_sent", {
-      phone,
-      message,
-      timestamp: new Date().toISOString(),
-    })
+      // Emitir evento de mensaje enviado
+      io.emit("message_sent", {
+        phone,
+        message,
+        timestamp: new Date().toISOString(),
+      })
 
-    res.status(200).json({
-      success: true,
-      message: "Mensaje enviado exitosamente",
-      messageId: sentMessage.id._serialized,
-    })
+      res.status(200).json({
+        success: true,
+        message: "Mensaje enviado exitosamente",
+        messageId: sentMessage.id._serialized,
+      })
+    } catch (error) {
+      console.error("❌ Error enviando mensaje:", error.message)
+
+      // Don't crash the server, return error response
+      res.status(500).json({
+        success: false,
+        error: "Error enviando mensaje: " + error.message,
+      })
+    }
   }),
 )
 
@@ -373,13 +412,12 @@ app.get(
 process.on("uncaughtException", (error) => {
   console.error("❌ Error no capturado:", error.message)
   console.error("Stack:", error.stack)
-  // No exit the process, just log the error
+  // Don't exit the process, just log the error
 })
 
 process.on("unhandledRejection", (reason, promise) => {
   console.error("❌ Promesa rechazada no manejada:", reason)
-  console.error("En promesa:", promise)
-  // No exit the process, just log the error
+  // Don't exit the process, just log the error
 })
 
 process.on("SIGTERM", async () => {
